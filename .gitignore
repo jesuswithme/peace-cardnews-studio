@@ -1,0 +1,7 @@
+# 로그인 정보는 저장소가 아닌 ~/.config/peace-cardnews/ 에 저장됩니다
+credentials.json
+host.json
+.config/
+node_modules/
+*.zip
+.DS_Store
