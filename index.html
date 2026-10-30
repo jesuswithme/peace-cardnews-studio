@@ -325,7 +325,7 @@ label.f{display:block;font-size:12.5px;font-weight:700;color:#57534e;margin:10px
 <body>
 <header>
   <h1>평화로운마음 <small>카드뉴스 스튜디오</small></h1>
-  <div class="free"><i></i>API 키 입력 없음 · 무료 AI · 무료 실사 · 무료 번역</div>
+  <div class="free"><i></i>API 키 없음 · 내 ChatGPT 구독 또는 무료 AI</div>
   <div class="grow"></div>
   <button class="btn out" id="dlOne">⤓ 현재 1장 다운로드</button>
   <button class="btn pri" id="dlAll">⤓ 전체 다운로드 (ZIP)</button>
@@ -401,7 +401,7 @@ label.f{display:block;font-size:12.5px;font-weight:700;color:#57534e;margin:10px
     </div>
     <label class="f">표지 배지 (비우면 AI가 정함)</label>
     <input type="text" id="badge" placeholder="예) 마음 처방전">
-    <label class="row" style="margin-top:10px;font-weight:700;font-size:13px;gap:6px"><input type="checkbox" id="autoImg"> 생성 후 표지 실사 이미지 자동 생성 (무료, 45초당 1장)</label>
+    <label class="row" style="margin-top:10px;font-weight:700;font-size:13px;gap:6px"><input type="checkbox" id="autoImg"> 생성 후 표지 실사 이미지 자동 생성</label>
   </div>
 
   <button class="gen" id="genBtn">✨ 카드뉴스 생성하기</button>
@@ -430,6 +430,8 @@ label.f{display:block;font-size:12.5px;font-weight:700;color:#57534e;margin:10px
   <div class="sec">
     <h3>📷 실사 배경 (현재 카드)</h3>
     <p class="hint">표지는 전체 배경, 본문은 하단 사진 영역으로 들어가요. 텍스트 없는 실사 프롬프트가 자동 작성됩니다.</p>
+    <label class="f" style="margin-top:0">이미지 엔진</label>
+    <div class="chips" id="imgEngines" style="margin:0 0 10px"></div>
     <div class="chips" id="imgStyles" style="margin-top:0"></div>
     <textarea id="imgPrompt" rows="4" style="margin-top:8px" placeholder="실사 이미지 프롬프트 (영어 권장)"></textarea>
     <div class="row" style="margin-top:6px;flex-wrap:wrap">
@@ -438,7 +440,7 @@ label.f{display:block;font-size:12.5px;font-weight:700;color:#57534e;margin:10px
       <label class="btn sm" style="margin:0">사진 첨부<input type="file" id="bgFile" accept="image/*" hidden></label>
       <button class="btn sm red" id="rmBg">사진 제거</button>
     </div>
-    <div class="note">무료 이미지 서버는 45초에 1장 제한이 있어 자동으로 대기 후 생성해요. 내 사진을 첨부해도 됩니다.</div>
+    <div class="note" id="imgNote"></div>
   </div>
 
   <div class="sec">
@@ -551,7 +553,7 @@ const SERIES30=['불안이 밀려올 때 마음을 지키는 3가지 습관','�
 /* ================== 상태 ================== */
 let state=null;
 function defaultState(){return{brand:{org:'평화로운마음',handle:'@평화로운마음',badge:''},src:'topic',topic:PRESETS[0],link:'',article:'',articleTopic:'',seriesTheme:'',seriesTopics:'',startDate:new Date().toISOString().slice(0,10),
- engine:'ai',tone:'warm',psych:'curiosity',count:7,lang:'ko',coverTpl:'photo-t',bodyTpl:'bento',tplTarget:'body',accent:'#2E7D6B',imgStyle:0,autoImg:true,decks:[],cur:0,slide:0}}
+ engine:'ai',tone:'warm',psych:'curiosity',count:7,lang:'ko',coverTpl:'photo-t',bodyTpl:'bento',tplTarget:'body',accent:'#2E7D6B',imgStyle:0,imgEngine:'auto',autoImg:true,decks:[],cur:0,slide:0}}
 const deck=()=>state.decks[state.cur];
 const card=()=>deck()?.cards[state.slide];
 
@@ -616,6 +618,9 @@ function renderControls(){
  $('#colorTag').textContent=state.accent.toUpperCase();$('#customColor').value=state.accent;
  $('#imgStyles').innerHTML=IMG_STYLES.map(([n],i)=>`<button class="chip ${state.imgStyle===i?'on':''}" data-is="${i}">${n}</button>`).join('');
  $('#autoImg').checked=!!state.autoImg;
+ const ie=imgEngine();
+ $('#imgEngines').innerHTML=[['codex','ChatGPT 이미지 (내 구독)'],['free','무료 이미지 (Pollinations)']].map(([k,n])=>`<button class="chip ${ie===k?'on':''}" data-ie="${k}">${n}</button>`).join('');
+ $('#imgNote').innerHTML=ie==='codex'?(codexReady()?'ChatGPT(gpt-image) 실사 이미지를 내 구독의 Codex 사용량으로 만들어요. 1장에 약 1분, 워터마크 없음. 이미지는 일반 문구 생성보다 사용량을 3~5배 빨리 써요.':`<b style="color:#be123c">ChatGPT 이미지를 쓰려면</b> ${!gpt.server?'시작하기.bat으로 실행해야 해요.':!gpt.codex?.installed?'Codex CLI 설치가 필요해요: <code>npm i -g @openai/codex</code>':'터미널에서 <code>codex login</code> 으로 ChatGPT 계정에 로그인해 주세요.'} <a href="#" id="codexRecheck">다시 확인</a>`):'무료 이미지 서버는 45초에 1장 제한이 있어 자동으로 대기 후 생성해요. 구석에 작은 워터마크가 들어가요. 내 사진을 첨부해도 됩니다.';
 }
 function syncInputs(){
  $('#topic').value=state.topic;$('#link').value=state.link;$('#article').value=state.article;$('#articleTopic').value=state.articleTopic;
@@ -792,12 +797,26 @@ async function aiDeck(src,date){const raw=await llm(buildPrompt(src));return dec
 
 /* ================== 무료 실사 이미지 (Pollinations) ================== */
 let imgChain=Promise.resolve(),lastImg=0;
+const codexReady=()=>gpt.server&&gpt.codex?.installed&&gpt.codex?.loggedIn;
+function imgEngine(){if(state.imgEngine==='free')return'free';if(state.imgEngine==='codex')return'codex';return codexReady()?'codex':'free'}
+async function codexImg(c){
+ const t0=Date.now();const tick=setInterval(()=>toast(`ChatGPT가 실사 이미지를 그리는 중… ${Math.round((Date.now()-t0)/1000)}초 (보통 1분 안팎)`,true),1000);
+ try{const r=await fetch('/api/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:fullImgPrompt(c)})});
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||('HTTP '+r.status)),{code:j.code});
+  const blob=await (await fetch(j.dataUrl)).blob();return await blobToDataURL(blob);
+ }finally{clearInterval(tick)}
+}
 async function blobToDataURL(blob){const bmp=await createImageBitmap(blob);const s=Math.min(1,Math.max(1080/bmp.width,1350/bmp.height));const c=document.createElement('canvas');c.width=Math.round(bmp.width*s);c.height=Math.round(bmp.height*s);c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);return c.toDataURL('image/jpeg',.88)}
 function fullImgPrompt(c){const st=IMG_STYLES[state.imgStyle]?.[1]||'';return[(c.imgPrompt||'').trim(),st,IMG_BASE].filter(Boolean).join(', ')}
 async function ensureImgPrompt(c,d){if(c.imgPrompt)return;const t=txt(c,'ko');const base=(d.topic||'')+' '+String(t.title||'').replace(/\*/g,' ');try{c.imgPrompt=await gtx(base.trim(),'en')}catch{c.imgPrompt=base}}
 function genImage(c,d){
  const job=imgChain.then(async()=>{
   await ensureImgPrompt(c,d);const prompt=fullImgPrompt(c);
+  if(imgEngine()==='codex'){
+   if(!codexReady()){toast('ChatGPT 이미지 엔진이 준비되지 않았어요. 실사 배경 영역의 안내를 확인해 주세요',false,5000);return false}
+   try{const url=await codexImg(c);c.bg=url;IDB.put(c.id,url);save();renderStage();renderGallery();toast('ChatGPT 실사 이미지 적용 완료');return true}
+   catch(e){console.warn(e);toast('ChatGPT 이미지 실패: '+e.message,false,6000);if(e.code==='codex_limit')window.open('https://chatgpt.com/codex/settings/usage','_blank');return false}
+  }
   for(let a=0;a<6;a++){
    const wait=46000-(Date.now()-lastImg);
    if(wait>0){for(let s=Math.ceil(wait/1000);s>0;s--){toast(`무료 이미지 서버 대기 중… ${s}초 (45초당 1장)`,true);await sleep(1000)}}
@@ -909,7 +928,7 @@ async function genSeries(){
  }finally{$('#stopBtn').style.display='none';$('#genBtn').disabled=false}
 }
 async function seriesImages(){const todo=state.decks.filter(d=>!d.cards[0].bg);if(!todo.length){toast('모든 표지에 사진이 있어요');return}
- toast(`표지 실사 ${todo.length}장 대기열 등록 (약 ${Math.ceil(todo.length*46/60)}분)`,false,4000);for(const d of todo)genImage(d.cards[0],d)}
+ toast(`표지 실사 ${todo.length}장 대기열 등록 (약 ${Math.ceil(todo.length*(imgEngine()==='codex'?75:46)/60)}분)`,false,4000);for(const d of todo)genImage(d.cards[0],d)}
 
 /* ================== 이벤트 ================== */
 function setByPath(o,path,val){const ks=path.split('.');let x=o;for(let i=0;i<ks.length-1;i++)x=x[ks[i]];x[ks.at(-1)]=val}
@@ -927,6 +946,7 @@ document.addEventListener('click',async e=>{
  if(ds.tpl){if(state.tplTarget==='cover')state.coverTpl=ds.tpl;else state.bodyTpl=ds.tpl;if(state.tplTarget==='cover'&&state.slide!==0)go(0);refresh();return}
  if(ds.c){state.accent=ds.c;refresh();return}
  if(ds.is!==undefined){state.imgStyle=+ds.is;renderControls();save();return}
+ if(ds.ie){state.imgEngine=ds.ie;renderControls();save();return}
  if(ds.s!==undefined){go(+ds.s);return}
  if(ds.rmit!==undefined){const t=editable(card());t.items.splice(+ds.rmit,1);refresh();return}
  switch(b.id){
@@ -985,6 +1005,7 @@ document.addEventListener('input',e=>{
  if(t.dataset.sz){const c=card();c.sz=c.sz||{};c.sz[t.dataset.sz]=+t.value;t.nextElementSibling.textContent=Math.round(t.value*100)+'%';clearTimeout(edT);edT=setTimeout(()=>{renderStage();save()},60)}
 });
 document.addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))return;if(e.key==='ArrowLeft'&&state.slide>0)go(state.slide-1);if(e.key==='ArrowRight'&&state.slide<deck().cards.length-1)go(state.slide+1)});
+document.addEventListener('click',async e=>{if(e.target.id==='codexRecheck'){e.preventDefault();try{gpt.codex=await (await fetch('/api/codex/recheck')).json()}catch{}renderControls();toast(codexReady()?'ChatGPT 이미지 사용 가능':'아직 준비되지 않았어요')}});
 $('#resetAll').onclick=async e=>{e.preventDefault();if(!confirm('모든 작업을 지우고 처음 상태로 돌릴까요?'))return;localStorage.removeItem(KEY);for(const d of state.decks)for(const c of d.cards)IDB.del(c.id);state=defaultState();state.decks=[offlineDeck({topic:PRESETS[0]})];syncInputs();refresh()};
 let rzT;window.addEventListener('resize',()=>{clearTimeout(rzT);rzT=setTimeout(renderStage,150)});
 

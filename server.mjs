@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const APP_NAME = 'PeaceMind CardNews Studio';
@@ -161,6 +161,79 @@ async function models() {
   modelCache = { at: Date.now(), list: arr }; return arr;
 }
 
+/* ---------- ChatGPT 이미지 생성 (Codex CLI 내장 이미지 생성, ChatGPT 로그인) ---------- */
+// Codex CLI가 ChatGPT 계정으로 로그인되어 있으면 gpt-image 이미지 생성을 Codex 사용량으로 쓸 수 있습니다.
+const CODEX_IMG_DIR = path.join(os.homedir(), '.codex', 'generated_images');
+let codexInfo = { checked: 0, installed: false, loggedIn: false, version: '' };
+// codex 실행 파일 찾기 (Windows는 npm 전역 설치의 codex.js를 node로 직접 실행 → 셸 불필요)
+let codexCmd = null;
+function resolveCodex() {
+  if (codexCmd) return codexCmd;
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (process.platform === 'win32') {
+    if (process.env.APPDATA) dirs.push(path.join(process.env.APPDATA, 'npm'));
+    for (const d of dirs) {
+      const js = path.join(d, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      if (fs.existsSync(js)) return (codexCmd = { cmd: process.execPath, pre: [js] });
+      const exe = path.join(d, 'codex.exe'); if (fs.existsSync(exe)) return (codexCmd = { cmd: exe, pre: [] });
+    }
+    return (codexCmd = { cmd: 'codex.cmd', pre: [], shell: true });
+  }
+  for (const d of [...dirs, '/opt/homebrew/bin', '/usr/local/bin', path.join(os.homedir(), '.npm-global', 'bin')]) { const f = path.join(d, 'codex'); if (fs.existsSync(f)) return (codexCmd = { cmd: f, pre: [] }); }
+  return (codexCmd = { cmd: 'codex', pre: [] });
+}
+function run(cmd, args, { input, cwd, timeout = 60e3 } = {}) {
+  return new Promise(resolve => {
+    let shell = false;
+    if (cmd === 'codex') { const c = resolveCodex(); cmd = c.cmd; args = [...c.pre, ...args]; shell = !!c.shell; }
+    const p = spawn(cmd, args, { cwd, shell, windowsHide: true, env: process.env });
+    let out = '', err = ''; const t = setTimeout(() => { try { p.kill(); } catch {} resolve({ code: -1, out, err: err + '\n[timeout]' }); }, timeout);
+    p.stdout.on('data', d => out += d); p.stderr.on('data', d => err += d);
+    p.on('error', e => { clearTimeout(t); resolve({ code: -1, out, err: String(e) }); });
+    p.on('close', code => { clearTimeout(t); resolve({ code, out, err }); });
+    if (input != null) { p.stdin.write(input); } p.stdin.end();
+  });
+}
+async function codexStatus(force = false) {
+  if (!force && Date.now() - codexInfo.checked < 300e3) return codexInfo;
+  const v = await run('codex', ['--version'], { timeout: 20e3 });
+  const s = v.code === 0 ? await run('codex', ['login', 'status'], { timeout: 20e3 }) : { out: '', err: '' };
+  codexInfo = { checked: Date.now(), installed: v.code === 0, version: (v.out || '').trim(), loggedIn: /ChatGPT/i.test(s.out + s.err) };
+  return codexInfo;
+}
+function newestImage(since) {
+  let best = null;
+  const walk = d => { let ents = []; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (/\.(png|jpe?g|webp)$/i.test(e.name)) { const m = fs.statSync(f).mtimeMs; if (m >= since && (!best || m > best.m)) best = { f, m }; } } };
+  walk(CODEX_IMG_DIR); return best?.f || null;
+}
+let imgQueue = Promise.resolve();
+function codexImage(prompt) {
+  const job = imgQueue.then(async () => {
+    const st = await codexStatus();
+    if (!st.installed) throw Object.assign(new Error('Codex CLI가 설치되어 있지 않아요. npm i -g @openai/codex 후 codex login 하세요'), { status: 503, code: 'codex_missing' });
+    if (!st.loggedIn) throw Object.assign(new Error('Codex가 ChatGPT 계정으로 로그인되어 있지 않아요. 터미널에서 codex login 을 실행하세요'), { status: 401, code: 'codex_login' });
+    const dir = path.join(CONF_DIR, 'img-jobs', crypto.randomUUID()); fs.mkdirSync(dir, { recursive: true });
+    const started = Date.now() - 2000;
+    const task = `$imagegen Generate exactly ONE image. Portrait orientation, 4:5 or the closest supported portrait size (e.g. 1024x1536). Photorealistic Instagram card-news background photo.
+Scene: ${prompt}
+Rules: no text, no letters, no captions, no logos, no watermark. Leave calm space in the lower third for overlaid headline text.
+Save the final image file as out.png in the current working directory. Do not create any other files. Reply only with the saved file path.`;
+    const r = await run('codex', ['exec', '--skip-git-repo-check', '--ephemeral', '-s', 'workspace-write', '-C', dir, '-'], { input: task, cwd: dir, timeout: 6 * 60e3 });
+    let file = path.join(dir, 'out.png'); if (!fs.existsSync(file)) file = newestImage(started);
+    try {
+      if (!file || !fs.existsSync(file)) {
+        const msg = (r.err + r.out).match(/(usage limit|rate limit|You've hit[^\n]*|limit[^\n]{0,80})/i)?.[0];
+        throw Object.assign(new Error(msg ? `Codex 사용량 한도: ${msg}` : 'Codex가 이미지를 만들지 못했어요. 잠시 후 다시 시도해 주세요'), { status: msg ? 429 : 502, code: msg ? 'codex_limit' : 'codex_failed' });
+      }
+      const buf = fs.readFileSync(file);
+      const ext = path.extname(file).slice(1).toLowerCase().replace('jpg', 'jpeg');
+      return `data:image/${ext};base64,${buf.toString('base64')}`;
+    } finally { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} }
+  });
+  imgQueue = job.catch(() => {}); return job;
+}
+
 /* ---------- HTTP 서버 ---------- */
 const server = http.createServer(async (req, res) => {
   try {
@@ -232,10 +305,19 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/api/status') {
       const c = loadCreds();
-      return send(res, 200, { server: true, connected: !!c?.access_token, email: c?.email || '', name: c?.name || '', planEnabled: !!c?.scopes?.includes('chatgpt.tokens.use.direct'), welcomed: !!c?.welcomed, model: c?.model || '', needsReauth: !!c?.needs_reauth, registered: !!c?.client_id, usageUrl: USAGE_URL });
+      const cx = await codexStatus();
+      return send(res, 200, { codex: { installed: cx.installed, loggedIn: cx.loggedIn, version: cx.version }, server: true, connected: !!c?.access_token, email: c?.email || '', name: c?.name || '', planEnabled: !!c?.scopes?.includes('chatgpt.tokens.use.direct'), welcomed: !!c?.welcomed, model: c?.model || '', needsReauth: !!c?.needs_reauth, registered: !!c?.client_id, usageUrl: USAGE_URL });
     }
     if (url.pathname === '/api/welcomed' && req.method === 'POST') { const c = loadCreds(); if (c) saveCreds({ ...c, welcomed: true }); return send(res, 200, { ok: true }); }
     if (url.pathname === '/api/model' && req.method === 'POST') { const b = await readBody(req); const c = loadCreds(); if (c) saveCreds({ ...c, model: String(b.model || '') }); return send(res, 200, { ok: true }); }
+    if (url.pathname === '/api/image' && req.method === 'POST') {
+      const b = await readBody(req); const prompt = String(b.prompt || '').slice(0, 2000);
+      if (!prompt.trim()) return send(res, 400, { error: '이미지 프롬프트가 비어 있어요' });
+      const t0 = Date.now(); const dataUrl = await codexImage(prompt);
+      console.log(`[이미지] Codex 생성 완료 ${Math.round((Date.now() - t0) / 1000)}초`);
+      return send(res, 200, { dataUrl });
+    }
+    if (url.pathname === '/api/codex/recheck') return send(res, 200, await codexStatus(true));
     if (url.pathname === '/api/models') return send(res, 200, { models: await models() });
     if (url.pathname === '/api/generate' && req.method === 'POST') {
       const b = await readBody(req);
@@ -255,6 +337,7 @@ const server = http.createServer(async (req, res) => {
 function listen(port, tries = 0) {
   PORT = port;
   server.once('error', err => { if (err.code === 'EADDRINUSE' && tries < 10) listen(port + 1, tries + 1); else { console.error(err); process.exit(1); } });
+  server.removeAllListeners('listening');
   server.listen(port, '127.0.0.1', () => {
     const u = `http://127.0.0.1:${PORT}/`;
     console.log(`\n  평화로운마음 카드뉴스 스튜디오 실행 중 → ${u}\n  (이 창을 닫으면 종료됩니다)\n`);

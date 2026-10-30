@@ -20,12 +20,22 @@ git clone https://github.com/jesuswithme/peace-cardnews-studio.git
 ## 생성 엔진
 | 엔진 | 비용 | 비고 |
 |---|---|---|
-| 내 ChatGPT 구독 | 요금제 사용량 차감 (Plus·Pro·Go) | OpenAI 공식 *Sign in with ChatGPT* (ChatGPT plan usage). API 키 불필요 |
+| 내 ChatGPT 구독 (문구·기획·번역) | 요금제 사용량 차감 (Plus·Pro·Go) | OpenAI 공식 *Sign in with ChatGPT* (ChatGPT plan usage). API 키 불필요 |
 | 무료 AI | 무료 | Pollinations 익명 모델 (품질 보통) |
 | 프롬프트 복사 | 무료 | ChatGPT/Gemini 웹에 붙여넣고 JSON 결과 붙여넣기 |
 | 오프라인 | 무료 | AI 없이 기본 문구 |
 
-실사 이미지는 구독 연동이 이미지 생성을 지원하지 않아 무료 Pollinations(45초당 1장)를 사용합니다.
+## 실사 이미지 엔진
+| 엔진 | 비용 | 비고 |
+|---|---|---|
+| ChatGPT 이미지 (기본) | 내 구독의 Codex 사용량 | Codex CLI 내장 이미지 생성(gpt-image). 1장 약 1분, 워터마크 없음. 일반 문구보다 사용량을 3~5배 빨리 씀 |
+| 무료 이미지 | 무료 | Pollinations, 45초당 1장, 작은 워터마크 |
+
+ChatGPT 이미지 준비 (최초 1회):
+```bash
+npm i -g @openai/codex
+codex login   # "Sign in with ChatGPT" 선택
+```
 
 ## ChatGPT 연결 보안
 - 토큰은 브라우저 저장소가 아닌 `~/.config/peace-cardnews/credentials.json` 에만 저장됩니다. 절대 공유·커밋하지 마세요.
